@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Recipe Not Found - Recipe Cookbook{% endblock %}
+
+{% block content %}
+<center>
+    <h2>
+        <font face="Comic Sans MS" color="#FF0000">
+            ❌ RECIPE NOT FOUND ❌
+        </font>
+    </h2>
+</center>
+
+<table width="100%" border="3" cellpadding="20" cellspacing="0" bgcolor="#FFCCCC">
+    <tr>
+        <td>
+            <center>
+                <font face="Arial" size="4" color="#000000">
+                    <b>Sorry, the recipe you're looking for doesn't exist.</b>
+                </font>
+                <br><br>
+                <a href="/">
+                    <button style="background-color: #00CCFF; color: white; padding: 15px 30px; border: none; border-radius: 5px; font-size: 16px; cursor: pointer;">
+                        <font face="Arial" size="4">
+                            <b>⬅️ BACK TO HOME</b>
+                        </font>
+                    </button>
+                </a>
+            </center>
+        </td>
+    </tr>
+</table>
+{% endblock %}
