@@ -70,7 +70,7 @@ To stop the application type "docker-compose down" in the running terminal or ki
 <br>
 
 ---
-### ⚠️  FOR USAGE INSTRUCTION, GO TO RESPECTIVE README FOR APP, ROUTES AND SERVICES  ⚠️
+### ⚠️  FOR USAGE INSTRUCTION, GO TO RESPECTIVE README FOR APP, ROUTERS AND SERVICES  ⚠️
 ---
 
 <br><br><br>
