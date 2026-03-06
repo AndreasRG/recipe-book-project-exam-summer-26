@@ -154,3 +154,31 @@ class RecipeResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ---------------------------------------------------------
+# Pydantic Schemas
+# ---------------------------------------------------------
+
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    name: str
+
+class UserUpdate(BaseModel):
+    email: Optional[str] = None
+    name: Optional[str] = None
+    password: Optional[str] = None
+
+class TokenCreate(BaseModel):
+    email: str
+    password: str
+
+class RecipeCreate(BaseModel):
+    title: str
+    time_minutes: int
+    price: str
+    link: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[int]] = None
+    ingredients: Optional[List[int]] = None
