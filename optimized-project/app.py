@@ -1,23 +1,39 @@
-# -*- coding: utf-8 -*-
-from fastapi import FastAPI, Request, HTTPException, Query
+# ---------------------------------------------------------
+# Imports
+# ---------------------------------------------------------
+
+from fastapi import FastAPI, Request, HTTPException, Depends, Query
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional, List
-import sqlite3
 import logging
-from fastapi.templating import Jinja2Templates
+from sqlalchemy.orm import selectinload
 
-# Configure logging
+
+from database import get_db_session, init_db
+from models import User, Recipe, Ingredient, Tag
+
+
+# ---------------------------------------------------------
+# App setup
+# ---------------------------------------------------------
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Recipe API (FastAPI)")
-DATABASE = "app.db"
+app = FastAPI(title="Recipe API (FastAPI ORM)")
 templates = Jinja2Templates(directory="templates")
 
-# Mount static files directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# ---------------------------------------------------------
+# Pydantic Schemas
+# ---------------------------------------------------------
 
 class UserCreate(BaseModel):
     email: str
@@ -40,1076 +56,245 @@ class RecipeCreate(BaseModel):
     link: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[List[int]] = None
-    ingredients: Optional[List[dict]] = None
-
-class IngredientCreate(BaseModel):
-    name: str
-
-class TagCreate(BaseModel):
-    name: str
-
-def get_db_connection():
-    conn = sqlite3.connect(DATABASE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        ## SQL doublication could be reducedby using ORM.
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL UNIQUE,
-                password TEXT NOT NULL,
-                name TEXT NOT NULL
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS recipes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                time_minutes INTEGER NOT NULL,
-                price TEXT NOT NULL,
-                link TEXT,
-                description TEXT,
-                image TEXT
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS ingredients (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS recipe_ingredients (
-                recipe_id INTEGER,
-                ingredient_id INTEGER,
-                amount TEXT,
-                unit TEXT,
-                FOREIGN KEY (recipe_id) REFERENCES recipes(id),
-                FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)
-            )
-        ''')
-
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS recipe_tags (
-                recipe_id INTEGER,
-                tag_id INTEGER,
-                FOREIGN KEY (recipe_id) REFERENCES recipes(id),
-                FOREIGN KEY (tag_id) REFERENCES tags(id)
-            )
-        ''')
-
-        ## No roleback mechanism in case of failure. Data integrity issues are likely or partial datasets.
-
-        cursor.execute('SELECT COUNT(*) FROM recipes')
-        recipe_count = cursor.fetchone()[0]
-
-        if recipe_count == 0:
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Spaghetti')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Eggs')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Pancetta')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Parmesan Cheese')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Black Pepper')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Salt')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Chicken Breast')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Breadcrumbs')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Mozzarella Cheese')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Tomato Sauce')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Olive Oil')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Garlic')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Penne Pasta')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Bell Peppers')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Zucchini')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Cherry Tomatoes')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Basil')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Butter')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Flour')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Salmon Fillet')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Lemon')")
-            cursor.execute("INSERT INTO ingredients (name) VALUES ('Dill')")
-
-            cursor.execute("INSERT INTO tags (name) VALUES ('Italian')")
-            cursor.execute("INSERT INTO tags (name) VALUES ('Quick')")
-            cursor.execute("INSERT INTO tags (name) VALUES ('Dinner')")
-            cursor.execute("INSERT INTO tags (name) VALUES ('Vegetarian')")
-            cursor.execute("INSERT INTO tags (name) VALUES ('Healthy')")
-            cursor.execute("INSERT INTO tags (name) VALUES ('Seafood')")
-
-            cursor.execute("""
-                INSERT INTO recipes (title, time_minutes, price, link, description)
-                VALUES ('Spaghetti Carbonara', 25, '12.50', 'http://example.com/carbonara',
-                'Step 1: Bring a large pot of salted water to boil and cook 400g spaghetti according to package directions.
-
-Step 2: While pasta cooks, cut 200g pancetta into small cubes and fry in a large pan over medium heat until crispy (about 5 minutes).
-
-Step 3: In a bowl, whisk together 4 large eggs, 100g grated Parmesan cheese, and plenty of black pepper.
-
-Step 4: When pasta is ready, reserve 1 cup of pasta water, then drain the pasta.
-
-Step 5: Remove the pan with pancetta from heat. Add the hot pasta to the pan and toss.
-
-Step 6: Pour the egg mixture over the pasta and toss quickly. The heat from the pasta will cook the eggs. Add pasta water bit by bit if needed to create a creamy sauce.
-
-Step 7: Serve immediately with extra Parmesan cheese and black pepper.')
-            """)
-            recipe1_id = cursor.lastrowid
-
-            cursor.execute("""
-                INSERT INTO recipes (title, time_minutes, price, link, description)
-                VALUES ('Chicken Parmesan', 50, '18.00', 'http://example.com/chicken-parm',
-                'Step 1: Preheat oven to 200C (400F).
-
-Step 2: Place 2 chicken breasts between plastic wrap and pound to 2cm thickness.
-
-Step 3: Set up breading station: flour in one plate, 2 beaten eggs in another, and 150g breadcrumbs mixed with 50g Parmesan in a third.
-
-Step 4: Season chicken with salt and pepper, then coat in flour, dip in egg, and press into breadcrumb mixture.
-
-Step 5: Heat 3 tablespoons olive oil in a large oven-safe skillet over medium-high heat. Fry chicken until golden brown, about 4 minutes per side.
-
-Step 6: Pour 300ml tomato sauce over the chicken, then top each breast with 100g sliced mozzarella.
-
-Step 7: Transfer skillet to oven and bake for 15-20 minutes until cheese is melted and bubbly.
-
-Step 8: Garnish with fresh basil and serve with pasta or salad.')
-            """)
-            recipe2_id = cursor.lastrowid
-
-            cursor.execute("""
-                INSERT INTO recipes (title, time_minutes, price, link, description)
-                VALUES ('Pasta Primavera', 30, '10.00', 'http://example.com/primavera',
-                'Step 1: Cook 350g penne pasta in salted boiling water according to package directions. Reserve 1 cup pasta water before draining.
-
-Step 2: While pasta cooks, chop 1 red bell pepper, 1 zucchini into bite-sized pieces, and halve 200g cherry tomatoes.
-
-Step 3: Heat 3 tablespoons olive oil in a large pan over medium-high heat. Add 3 minced garlic cloves and cook for 30 seconds.
-
-Step 4: Add bell peppers and zucchini to the pan. Cook for 5-7 minutes until vegetables are tender.
-
-Step 5: Add cherry tomatoes and cook for another 2-3 minutes until they start to soften.
-
-Step 6: Add the drained pasta to the pan with vegetables. Toss everything together, adding pasta water as needed to create a light sauce.
-
-Step 7: Season with salt and black pepper. Remove from heat and stir in fresh basil leaves.
-
-Step 8: Serve hot with grated Parmesan cheese on top.')
-            """)
-            recipe3_id = cursor.lastrowid
-
-            cursor.execute("""
-                INSERT INTO recipes (title, time_minutes, price, link, description)
-                VALUES ('Garlic Butter Salmon', 20, '22.00', 'http://example.com/salmon',
-                'Step 1: Pat 4 salmon fillets (150g each) dry with paper towels and season both sides with salt and pepper.
-
-Step 2: Heat 2 tablespoons olive oil in a large skillet over medium-high heat.
-
-Step 3: Place salmon fillets skin-side up in the pan. Cook for 4-5 minutes until golden brown.
-
-Step 4: Flip the salmon and cook for another 3-4 minutes.
-
-Step 5: Reduce heat to medium and add 3 tablespoons butter, 4 minced garlic cloves, and juice of 1 lemon to the pan.
-
-Step 6: Spoon the garlic butter sauce over the salmon repeatedly for 1-2 minutes.
-
-Step 7: Remove from heat and sprinkle with fresh dill.
-
-Step 8: Serve immediately with the pan sauce, accompanied by rice or vegetables.')
-            """)
-            recipe4_id = cursor.lastrowid
-
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe1_id, 1, '400', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe1_id, 2, '4', 'large'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe1_id, 3, '200', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe1_id, 4, '100', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe1_id, 5, '1', 'tsp'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe1_id, 6, '1', 'tsp'))
-
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 7, '2', 'pieces'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 8, '150', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 9, '100', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 10, '300', 'ml'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 11, '3', 'tbsp'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 4, '50', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 2, '2', 'large'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 19, '100', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe2_id, 17, '10', 'leaves'))
-
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 13, '350', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 14, '1', 'piece'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 15, '1', 'piece'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 16, '200', 'g'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 12, '3', 'cloves'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 11, '3', 'tbsp'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 17, '15', 'leaves'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe3_id, 4, '50', 'g'))
-
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe4_id, 20, '4', 'fillets'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe4_id, 18, '3', 'tbsp'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe4_id, 12, '4', 'cloves'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe4_id, 21, '1', 'piece'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe4_id, 22, '2', 'tbsp'))
-            cursor.execute('INSERT INTO recipe_ingredients (recipe_id, ingredient_id, amount, unit) VALUES (?, ?, ?, ?)', (recipe4_id, 11, '2', 'tbsp'))
-
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe1_id, 1))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe1_id, 3))
-
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe2_id, 1))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe2_id, 3))
-
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe3_id, 1))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe3_id, 2))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe3_id, 4))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe3_id, 5))
-
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe4_id, 2))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe4_id, 3))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe4_id, 5))
-            cursor.execute('INSERT INTO recipe_tags (recipe_id, tag_id) VALUES (?, ?)', (recipe4_id, 6))
-
-        conn.commit()
-        logger.info("Database initialized successfully")
-    except sqlite3.Error as e:
-        logger.error(f"Database initialization error: {str(e)}")
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    ingredients: Optional[List[int]] = None
 
 
-## Risc of SQL injection in the following routes: GET /, GET /recipes/<int:id>/, GET /api/recipe/recipes/<int:id>/, GET /api/recipe/ingredients/, GET /api/recipe/tags/
+# ---------------------------------------------------------
+# Startup: Create tables
+# ---------------------------------------------------------
 
-# -----------------------------
-# Home route (GET /)
-# -----------------------------
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+    logger.info("Database initialized")
+
+
+# ---------------------------------------------------------
+# Home page (HTML)
+# ---------------------------------------------------------
+
 @app.get("/")
-async def home(request: Request):
-    print("Route invoked: GET /")
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT id, title, time_minutes, price, link FROM recipes")
-        recipes = cursor.fetchall()
-
-        recipes_with_tags = []
-        for recipe in recipes:
-            cursor.execute("""
-                SELECT t.id, t.name FROM tags t
-                JOIN recipe_tags rt ON t.id = rt.tag_id
-                WHERE rt.recipe_id = ?
-            """, (recipe["id"],))
-            recipe_tags = cursor.fetchall()
-
-            recipes_with_tags.append({
-                "id": recipe["id"],
-                "title": recipe["title"],
-                "time_minutes": recipe["time_minutes"],
-                "price": recipe["price"],
-                "link": recipe["link"] or "",
-                "tags": [{"id": t["id"], "name": t["name"]} for t in recipe_tags]
-            })
-
-        return templates.TemplateResponse(
-            "home.html",
-            {"request": request, "recipes": recipes_with_tags}
+async def home(request: Request, db: AsyncSession = Depends(get_db_session)):
+    result = await db.execute(
+        select(Recipe)
+        .options(
+            selectinload(Recipe.tags),
+            selectinload(Recipe.ingredients)
         )
-    except sqlite3.Error as e:
-        logger.error(f"Database error in home route: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in home route: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    )
+
+    recipes = result.scalars().unique().all()
+
+    recipe_list = []
+    for r in recipes:
+        recipe_list.append({
+            "id": r.id,
+            "title": r.title,
+            "time_minutes": r.time_minutes,
+            "price": r.price,
+            "link": r.link or "",
+            "tags": [{"id": t.id, "name": t.name} for t in r.tags]
+        })
+
+    return templates.TemplateResponse(
+        "home.html",
+        {"request": request, "recipes": recipe_list}
+    )
 
 
-# -----------------------------
-# Recipe detail route (GET /recipes/{id}/)
-# -----------------------------
+# ---------------------------------------------------------
+# Recipe detail (HTML)
+# ---------------------------------------------------------
+
 @app.get("/recipes/{id}/")
-async def recipe_detail(id: int, request: Request):
-    print("Route invoked: GET /recipes/<id>/")
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-
-        cursor.execute(
-            "SELECT id, title, time_minutes, price, link, description FROM recipes WHERE id = ?",
-            (id,)
+async def recipe_detail(id: int, request: Request, db: AsyncSession = Depends(get_db_session)):
+    result = await db.execute(
+        select(Recipe)
+        .where(Recipe.id == id)
+        .options(
+            selectinload(Recipe.tags),
+            selectinload(Recipe.ingredients)
         )
-        recipe = cursor.fetchone()
+    )
 
-        if recipe is None:
-            return templates.TemplateResponse(
-                "recipe_not_found.html",
-                {"request": request},
-                status_code=404
-            )
+    recipe = result.scalars().first()
 
-        cursor.execute("""
-            SELECT i.id, i.name, ri.amount, ri.unit FROM ingredients i
-            JOIN recipe_ingredients ri ON i.id = ri.ingredient_id
-            WHERE ri.recipe_id = ?
-        """, (id,))
-        recipe_ingredients = cursor.fetchall()
-
-        cursor.execute("""
-            SELECT t.id, t.name FROM tags t
-            JOIN recipe_tags rt ON t.id = rt.tag_id
-            WHERE rt.recipe_id = ?
-        """, (id,))
-        recipe_tags = cursor.fetchall()
-
-        recipe_data = {
-            "id": recipe["id"],
-            "title": recipe["title"],
-            "time_minutes": recipe["time_minutes"],
-            "price": recipe["price"],
-            "link": recipe["link"] or "",
-            "description": recipe["description"] or "",
-            "ingredients": [
-                {"id": ing["id"], "name": ing["name"], "amount": ing["amount"], "unit": ing["unit"]}
-                for ing in recipe_ingredients
-            ],
-            "tags": [{"id": tag["id"], "name": tag["name"]} for tag in recipe_tags]
-        }
-
+    if not recipe:
         return templates.TemplateResponse(
-            "recipe_detail.html",
-            {"request": request, "recipe": recipe_data}
+            "recipe_not_found.html",
+            {"request": request},
+            status_code=404
         )
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_detail route: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_detail route: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+
+    recipe_data = {
+        "id": recipe.id,
+        "title": recipe.title,
+        "time_minutes": recipe.time_minutes,
+        "price": recipe.price,
+        "link": recipe.link or "",
+        "description": recipe.description or "",
+        "ingredients": [{"id": ing.id, "name": ing.name} for ing in recipe.ingredients],
+        "tags": [{"id": t.id, "name": t.name} for t in recipe.tags]
+    }
+
+    return templates.TemplateResponse(
+        "recipe_detail.html",
+        {"request": request, "recipe": recipe_data}
+    )
 
 
-# -----------------------------
-# API overview route (GET /api)
-# -----------------------------
+# ---------------------------------------------------------
+# API Overview
+# ---------------------------------------------------------
+
 @app.get("/api")
 async def api_overview():
-    print("Route invoked: GET /api")
+    return {
+        "create_user_url": "/api/user/create/",
+        "current_user_url": "/api/user/me/",
+        "user_token_url": "/api/user/token/",
+        "recipes_url": "/api/recipe/recipes/",
+        "recipe_url": "/api/recipe/recipes/{id}/",
+        "ingredients_url": "/api/recipe/ingredients/",
+        "tags_url": "/api/recipe/tags/"
+    }
+
+
+# ---------------------------------------------------------
+# User API (ORM)
+# ---------------------------------------------------------
+
+@app.post("/api/user/create/", status_code=201)
+async def user_create(user: UserCreate, db: AsyncSession = Depends(get_db_session)):
+    new_user = User(email=user.email, password=user.password, name=user.name)
+    db.add(new_user)
+
     try:
-        routes = {
-            "create_user_url": "http://localhost:5000/api/user/create/",
-            "current_user_url": "http://localhost:5000/api/user/me/",
-            "user_token_url": "http://localhost:5000/api/user/token/",
-            "recipes_url": "http://localhost:5000/api/recipe/recipes/{?ingredients,tags}",
-            "recipe_url": "http://localhost:5000/api/recipe/recipes/{id}/",
-            "recipe_image_url": "http://localhost:5000/api/recipe/recipes/{id}/upload-image/",
-            "ingredients_url": "http://localhost:5000/api/recipe/ingredients/{?assigned_only}",
-            "ingredient_url": "http://localhost:5000/api/recipe/ingredients/{id}/",
-            "tags_url": "http://localhost:5000/api/recipe/tags/{?assigned_only}",
-            "tag_url": "http://localhost:5000/api/recipe/tags/{id}/"
-        }
-        return JSONResponse(routes)
-    except Exception as e:
-        logger.error(f"Unexpected error in api_overview: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-
-## User creation and authentication routes are not secure. Data leaks and hack-attacks are likely. Also there is some missing authentication and authorization logic in the following routes: GET /api/user/me/, PUT /api/user/me/, PATCH /api/user/me/, POST /api/user/token/, GET /api/recipe/recipes/, POST /api/recipe/recipes/, GET /api/recipe/recipes/<int:id>/, PUT /api/recipe/recipes/<int:id>/, PATCH /api/recipe/recipes/<int:id>/, DELETE /api/recipe/recipes/<int:id>/, POST /api/recipe/recipes/<int:id>/upload-image/, GET /api/recipe/ingredients/, PUT /api/recipe/ingredients/<int:id>/, PATCH /api/recipe/ingredients/<int:id>/, DELETE /api/recipe/ingredients/<int:id>/, GET /api/recipe/tags/, PUT /api/recipe/tags/<int:id>/, PATCH /api/recipe/tags/<int:id>/, DELETE /api/recipe/tags/<int:id>/
-## Missing api authentication and authorization logic is a critical security issue that should be addressed before deploying this application. No input control.
-## Missing error handling
-
-@app.post('/api/user/create/')
-async def user_create(user: UserCreate):
-    print('Route invoked: POST /api/user/create/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            'INSERT INTO users (email, password, name) VALUES (?, ?, ?)',
-            (user.email, user.password, user.name)
-        )
-        conn.commit()
-        user_id = cursor.lastrowid
-        logger.info(f"User created with ID: {user_id}")
-
-        return JSONResponse(content={
-            'id': user_id,
-            'email': user.email,
-            'name': user.name
-        }, status_code=201)
-    except sqlite3.IntegrityError as e:
-        logger.warning(f"Integrity error in user_create: {str(e)}")
+        await db.commit()
+        await db.refresh(new_user)
+    except Exception:
+        await db.rollback()
         raise HTTPException(status_code=400, detail="Email already exists")
-    except sqlite3.Error as e:
-        logger.error(f"Database error in user_create: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in user_create: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
 
-@app.get('/api/user/me/')
-async def user_me_retrieve():
-    print('Route invoked: GET /api/user/me/')
-    try:
-        # This is a placeholder implementation
-        # In a real app, this would use authentication
-        return JSONResponse(content={
-            'email': 'user@example.com',
-            'name': 'Example User'
-        }, status_code=200)
-    except Exception as e:
-        logger.error(f"Unexpected error in user_me_retrieve: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        pass
+    return {"id": new_user.id, "email": new_user.email, "name": new_user.name}
 
-@app.put('/api/user/me/')
+
+@app.get("/api/user/me/")
+async def user_me():
+    return {"email": "user@example.com", "name": "Example User"}
+
+
+@app.put("/api/user/me/")
 async def user_me_update(user: UserUpdate):
-    print('Route invoked: PUT /api/user/me/')
-    try:
-        # This is a placeholder implementation
-        # In a real app, this would authenticate and update the user
-        return JSONResponse(content={
-            'email': user.email or 'user@example.com',
-            'name': user.name or 'Example User'
-        }, status_code=200)
-    except Exception as e:
-        logger.error(f"Unexpected error in user_me_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        pass
+    return {"email": user.email or "user@example.com", "name": user.name or "Example User"}
 
-@app.patch('/api/user/me/')
+
+@app.patch("/api/user/me/")
 async def user_me_partial_update(user: UserUpdate):
-    print('Route invoked: PATCH /api/user/me/')
-    try:
-        # This is a placeholder implementation
-        # In a real app, this would authenticate and partially update the user
-        response = {}
-        if user.email:
-            response['email'] = user.email
-        else:
-            response['email'] = 'user@example.com'
+    return {
+        "email": user.email or "user@example.com",
+        "name": user.name or "Example User"
+    }
 
-        if user.name:
-            response['name'] = user.name
-        else:
-            response['name'] = 'Example User'
 
-        return JSONResponse(content=response, status_code=200)
-    except Exception as e:
-        logger.error(f"Unexpected error in user_me_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        pass
+@app.post("/api/user/token/")
+async def user_token_create(token: TokenCreate, db: AsyncSession = Depends(get_db_session)):
+    result = await db.execute(select(User).where(User.email == token.email))
+    user = result.scalars().first()
 
-@app.post('/api/user/token/')
-async def user_token_create(token: TokenCreate):
-    print('Route invoked: POST /api/user/token/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Check if user exists (password should be hashed in production)
-        cursor.execute('SELECT id, password FROM users WHERE email = ?', (token.email,))
-        user = cursor.fetchone()
-        
-        if not user:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-        
-        # In production, use proper password hashing
-        if user['password'] != token.password:
-            raise HTTPException(status_code=401, detail="Invalid email or password")
-        
-        logger.info(f"Token created for user: {token.email}")
-        return JSONResponse(content={
-            'email': token.email,
-            'token': 'placeholder_jwt_token'
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in user_token_create: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in user_token_create: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    if not user or user.password != token.password:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
-@app.get('/api/recipe/recipes/')
-async def recipe_recipes_list(ingredients: Optional[str] = Query(None), tags: Optional[str] = Query(None)):
-    print('Route invoked: GET /api/recipe/recipes/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, title, time_minutes, price, link FROM recipes')
-        recipes = cursor.fetchall()
+    return {"email": token.email, "token": "placeholder_jwt_token"}
 
-        result = []
-        for recipe in recipes:
-            cursor.execute('''
-                SELECT i.id, i.name, ri.amount, ri.unit FROM ingredients i
-                JOIN recipe_ingredients ri ON i.id = ri.ingredient_id
-                WHERE ri.recipe_id = ?
-            ''', (recipe['id'],))
-            recipe_ingredients = cursor.fetchall()
 
-            cursor.execute('''
-                SELECT t.id, t.name FROM tags t
-                JOIN recipe_tags rt ON t.id = rt.tag_id
-                WHERE rt.recipe_id = ?
-            ''', (recipe['id'],))
-            recipe_tags = cursor.fetchall()
+# ---------------------------------------------------------
+# Recipe API (ORM)
+# ---------------------------------------------------------
 
-            result.append({
-                'id': recipe['id'],
-                'title': recipe['title'],
-                'time_minutes': recipe['time_minutes'],
-                'price': recipe['price'],
-                'link': recipe['link'] or '',
-                'ingredients': [{'id': ing['id'], 'name': ing['name'], 'amount': ing['amount'], 'unit': ing['unit']} for ing in recipe_ingredients],
-                'tags': [{'id': tag['id'], 'name': tag['name']} for tag in recipe_tags]
-            })
+@app.get("/api/recipe/recipes/")
+async def recipe_list(db: AsyncSession = Depends(get_db_session)):
+    result = await db.execute(
+        select(Recipe)
+        .options(
+            selectinload(Recipe.tags),
+            selectinload(Recipe.ingredients)
+        )
+    )
 
-        return JSONResponse(content=result, status_code=200)
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_list: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_list: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    recipes = result.scalars().unique().all()
 
-@app.post('/api/recipe/recipes/')
-async def recipe_recipes_create(recipe: RecipeCreate):
-    print('Route invoked: POST /api/recipe/recipes/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO recipes (title, time_minutes, price, link, description)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (recipe.title, recipe.time_minutes, 
-              recipe.price, recipe.link or '', 
-              recipe.description or ''))
-        conn.commit()
-        recipe_id = cursor.lastrowid
-        logger.info(f"Recipe created with ID: {recipe_id}")
-        
-        return JSONResponse(content={
-            'id': recipe_id,
-            'title': recipe.title,
-            'time_minutes': recipe.time_minutes,
-            'price': recipe.price,
-            'link': recipe.link or '',
-            'tags': recipe.tags or [],
-            'ingredients': recipe.ingredients or [],
-            'description': recipe.description or ''
-        }, status_code=201)
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_create: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_create: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    output = []
+    for r in recipes:
+        output.append({
+            "id": r.id,
+            "title": r.title,
+            "time_minutes": r.time_minutes,
+            "price": r.price,
+            "link": r.link or "",
+            "ingredients": [{"id": ing.id, "name": ing.name} for ing in r.ingredients],
+            "tags": [{"id": t.id, "name": t.name} for t in r.tags]
+        })
 
-@app.get('/api/recipe/recipes/{id}/')
-async def recipe_recipes_retrieve(id: int):
-    print('Route invoked: GET /api/recipe/recipes/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, title, time_minutes, price, link, description FROM recipes WHERE id = ?', (id,))
-        recipe = cursor.fetchone()
+    return output
 
-        if not recipe:
-            raise HTTPException(status_code=404, detail="Recipe not found")
 
-        cursor.execute('''
-            SELECT i.id, i.name, ri.amount, ri.unit FROM ingredients i
-            JOIN recipe_ingredients ri ON i.id = ri.ingredient_id
-            WHERE ri.recipe_id = ?
-        ''', (id,))
-        recipe_ingredients = cursor.fetchall()
+@app.post("/api/recipe/recipes/", status_code=201)
+async def recipe_create(recipe: RecipeCreate, db: AsyncSession = Depends(get_db_session)):
+    new_recipe = Recipe(
+        title=recipe.title,
+        time_minutes=recipe.time_minutes,
+        price=recipe.price,
+        link=recipe.link,
+        description=recipe.description
+    )
 
-        cursor.execute('''
-            SELECT t.id, t.name FROM tags t
-            JOIN recipe_tags rt ON t.id = rt.tag_id
-            WHERE rt.recipe_id = ?
-        ''', (id,))
-        recipe_tags = cursor.fetchall()
+    # Attach tags
+    if recipe.tags:
+        tag_rows = await db.execute(select(Tag).where(Tag.id.in_(recipe.tags)))
+        new_recipe.tags = tag_rows.scalars().all()
 
-        return JSONResponse(content={
-            'id': recipe['id'],
-            'title': recipe['title'],
-            'time_minutes': recipe['time_minutes'],
-            'price': recipe['price'],
-            'link': recipe['link'] or '',
-            'description': recipe['description'] or '',
-            'ingredients': [{'id': ing['id'], 'name': ing['name'], 'amount': ing['amount'], 'unit': ing['unit']} for ing in recipe_ingredients],
-            'tags': [{'id': tag['id'], 'name': tag['name']} for tag in recipe_tags]
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_retrieve: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_retrieve: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    # Attach ingredients
+    if recipe.ingredients:
+        ing_rows = await db.execute(select(Ingredient).where(Ingredient.id.in_(recipe.ingredients)))
+        new_recipe.ingredients = ing_rows.scalars().all()
 
-@app.put('/api/recipe/recipes/{id}/')
-async def recipe_recipes_update(id: int, recipe: RecipeCreate):
-    print('Route invoked: PUT /api/recipe/recipes/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id FROM recipes WHERE id = ?', (id,))
-        existing_recipe = cursor.fetchone()
-        
-        if not existing_recipe:
-            raise HTTPException(status_code=404, detail="Recipe not found")
-        
-        cursor.execute('''
-            UPDATE recipes 
-            SET title = ?, time_minutes = ?, price = ?, link = ?, description = ?
-            WHERE id = ?
-        ''', (recipe.title, recipe.time_minutes, 
-              recipe.price, recipe.link or '', 
-              recipe.description or '', id))
-        conn.commit()
-        logger.info(f"Recipe {id} updated")
-        
-        return JSONResponse(content={
-            'id': id,
-            'title': recipe.title,
-            'time_minutes': recipe.time_minutes,
-            'price': recipe.price,
-            'link': recipe.link or '',
-            'tags': recipe.tags or [],
-            'ingredients': recipe.ingredients or [],
-            'description': recipe.description or ''
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    db.add(new_recipe)
+    await db.commit()
+    await db.refresh(new_recipe)
 
-@app.patch('/api/recipe/recipes/{id}/')
-async def recipe_recipes_partial_update(id: int, recipe: RecipeCreate):
-    print('Route invoked: PATCH /api/recipe/recipes/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, title, time_minutes, price, link, description FROM recipes WHERE id = ?', (id,))
-        existing_recipe = cursor.fetchone()
-        
-        if not existing_recipe:
-            raise HTTPException(status_code=404, detail="Recipe not found")
-        
-        # Update only provided fields
-        title = recipe.title or existing_recipe['title']
-        time_minutes = recipe.time_minutes or existing_recipe['time_minutes']
-        price = recipe.price or existing_recipe['price']
-        link = recipe.link or existing_recipe['link'] or ''
-        description = recipe.description or existing_recipe['description'] or ''
-        
-        cursor.execute('''
-            UPDATE recipes 
-            SET title = ?, time_minutes = ?, price = ?, link = ?, description = ?
-            WHERE id = ?
-        ''', (title, time_minutes, price, link, description, id))
-        conn.commit()
-        logger.info(f"Recipe {id} partially updated")
-        
-        response = {
-            'id': id,
-            'title': title,
-            'time_minutes': time_minutes,
-            'price': price,
-            'link': link,
-            'tags': recipe.tags or [],
-            'ingredients': recipe.ingredients or [],
-            'description': description
-        }
-        return JSONResponse(content=response, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    return {"id": new_recipe.id}
 
-@app.delete('/api/recipe/recipes/{id}/')
-async def recipe_recipes_destroy(id: int):
-    print('Route invoked: DELETE /api/recipe/recipes/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM recipes WHERE id = ?', (id,))
-        existing_recipe = cursor.fetchone()
-        
-        if not existing_recipe:
-            raise HTTPException(status_code=404, detail="Recipe not found")
-        
-        # Delete related records first
-        cursor.execute('DELETE FROM recipe_ingredients WHERE recipe_id = ?', (id,))
-        cursor.execute('DELETE FROM recipe_tags WHERE recipe_id = ?', (id,))
-        cursor.execute('DELETE FROM recipes WHERE id = ?', (id,))
-        conn.commit()
-        logger.info(f"Recipe {id} deleted")
-        
-        return JSONResponse(content={}, status_code=204)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_destroy: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_destroy: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
 
-@app.post('/api/recipe/recipes/{id}/upload-image/')
-async def recipe_recipes_upload_image(id: int):
-    print('Route invoked: POST /api/recipe/recipes/{id}/upload-image/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM recipes WHERE id = ?', (id,))
-        existing_recipe = cursor.fetchone()
-        
-        if not existing_recipe:
-            raise HTTPException(status_code=404, detail="Recipe not found")
-        
-        # Placeholder implementation - in production, handle actual file uploads
-        logger.info(f"Image upload initiated for recipe: {id}")
-        return JSONResponse(content={
-            'id': id,
-            'image': 'http://example.com/image.jpg'
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_recipes_upload_image: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_recipes_upload_image: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+@app.get("/api/recipe/recipes/{id}/")
+async def recipe_detail_api(id: int, db: AsyncSession = Depends(get_db_session)):
+    result = await db.execute(select(Recipe).where(Recipe.id == id))
+    recipe = result.scalars().first()
 
-@app.get('/api/recipe/ingredients/')
-async def recipe_ingredients_list(assigned_only: Optional[str] = Query(None)):
-    print('Route invoked: GET /api/recipe/ingredients/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM ingredients')
-        ingredients = cursor.fetchall()
+    if not recipe:
+        raise HTTPException(status_code=404, detail="Recipe not found")
 
-        result = [{'id': ing['id'], 'name': ing['name']} for ing in ingredients]
-        return JSONResponse(content=result, status_code=200)
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_ingredients_list: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_ingredients_list: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+    return {
+        "id": recipe.id,
+        "title": recipe.title,
+        "time_minutes": recipe.time_minutes,
+        "price": recipe.price,
+        "link": recipe.link or "",
+        "description": recipe.description or "",
+        "ingredients": [{"id": ing.id, "name": ing.name} for ing in recipe.ingredients],
+        "tags": [{"id": t.id, "name": t.name} for t in recipe.tags]
+    }
 
-@app.put('/api/recipe/ingredients/{id}/')
-async def recipe_ingredients_update(id: int, ingredient: IngredientCreate):
-    print('Route invoked: PUT /api/recipe/ingredients/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM ingredients WHERE id = ?', (id,))
-        existing_ingredient = cursor.fetchone()
-        
-        if not existing_ingredient:
-            raise HTTPException(status_code=404, detail="Ingredient not found")
-        
-        cursor.execute('UPDATE ingredients SET name = ? WHERE id = ?', 
-                      (ingredient.name, id))
-        conn.commit()
-        logger.info(f"Ingredient {id} updated")
-        
-        return JSONResponse(content={
-            'id': id,
-            'name': ingredient.name
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_ingredients_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_ingredients_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
 
-@app.patch('/api/recipe/ingredients/{id}/')
-async def recipe_ingredients_partial_update(id: int, ingredient: IngredientCreate):
-    print('Route invoked: PATCH /api/recipe/ingredients/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT name FROM ingredients WHERE id = ?', (id,))
-        existing_ingredient = cursor.fetchone()
-        
-        if not existing_ingredient:
-            raise HTTPException(status_code=404, detail="Ingredient not found")
-        
-        name = ingredient.name or existing_ingredient['name']
-        cursor.execute('UPDATE ingredients SET name = ? WHERE id = ?', (name, id))
-        conn.commit()
-        logger.info(f"Ingredient {id} partially updated")
-        
-        return JSONResponse(content={
-            'id': id,
-            'name': name
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_ingredients_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_ingredients_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
+import uvicorn
+import asyncio
 
-@app.delete('/api/recipe/ingredients/{id}/')
-async def recipe_ingredients_destroy(id: int):
-    print('Route invoked: DELETE /api/recipe/ingredients/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM ingredients WHERE id = ?', (id,))
-        existing_ingredient = cursor.fetchone()
-        
-        if not existing_ingredient:
-            raise HTTPException(status_code=404, detail="Ingredient not found")
-        
-        # Delete related recipe_ingredients records first
-        cursor.execute('DELETE FROM recipe_ingredients WHERE ingredient_id = ?', (id,))
-        cursor.execute('DELETE FROM ingredients WHERE id = ?', (id,))
-        conn.commit()
-        logger.info(f"Ingredient {id} deleted")
-        
-        return JSONResponse(content={}, status_code=204)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_ingredients_destroy: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_ingredients_destroy: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
-
-@app.get('/api/recipe/tags/')
-async def recipe_tags_list(assigned_only: Optional[str] = Query(None)):
-    print('Route invoked: GET /api/recipe/tags/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM tags')
-        tags = cursor.fetchall()
-
-        result = [{'id': tag['id'], 'name': tag['name']} for tag in tags]
-        return JSONResponse(content=result, status_code=200)
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_tags_list: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_tags_list: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
-
-@app.put('/api/recipe/tags/{id}/')
-async def recipe_tags_update(id: int, tag: TagCreate):
-    print('Route invoked: PUT /api/recipe/tags/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM tags WHERE id = ?', (id,))
-        existing_tag = cursor.fetchone()
-        
-        if not existing_tag:
-            raise HTTPException(status_code=404, detail="Tag not found")
-        
-        cursor.execute('UPDATE tags SET name = ? WHERE id = ?', 
-                      (tag.name, id))
-        conn.commit()
-        logger.info(f"Tag {id} updated")
-        
-        return JSONResponse(content={
-            'id': id,
-            'name': tag.name
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_tags_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_tags_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
-
-@app.patch('/api/recipe/tags/{id}/')
-async def recipe_tags_partial_update(id: int, tag: TagCreate):
-    print('Route invoked: PATCH /api/recipe/tags/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT name FROM tags WHERE id = ?', (id,))
-        existing_tag = cursor.fetchone()
-        
-        if not existing_tag:
-            raise HTTPException(status_code=404, detail="Tag not found")
-        
-        name = tag.name or existing_tag['name']
-        cursor.execute('UPDATE tags SET name = ? WHERE id = ?', (name, id))
-        conn.commit()
-        logger.info(f"Tag {id} partially updated")
-        
-        return JSONResponse(content={
-            'id': id,
-            'name': name
-        }, status_code=200)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_tags_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_tags_partial_update: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
-
-@app.delete('/api/recipe/tags/{id}/')
-async def recipe_tags_destroy(id: int):
-    print('Route invoked: DELETE /api/recipe/tags/{id}/')
-    conn = None
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT id FROM tags WHERE id = ?', (id,))
-        existing_tag = cursor.fetchone()
-        
-        if not existing_tag:
-            raise HTTPException(status_code=404, detail="Tag not found")
-        
-        # Delete related recipe_tags records first
-        cursor.execute('DELETE FROM recipe_tags WHERE tag_id = ?', (id,))
-        cursor.execute('DELETE FROM tags WHERE id = ?', (id,))
-        conn.commit()
-        logger.info(f"Tag {id} deleted")
-        
-        return JSONResponse(content={}, status_code=204)
-    except HTTPException:
-        raise
-    except sqlite3.Error as e:
-        logger.error(f"Database error in recipe_tags_destroy: {str(e)}")
-        raise HTTPException(status_code=500, detail="Database error occurred")
-    except Exception as e:
-        logger.error(f"Unexpected error in recipe_tags_destroy: {str(e)}")
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-    finally:
-        if conn:
-            conn.close()
-
-## debug mode should be off in releases.
-
-if __name__ == '__main__':
-    init_db()
-    import uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=5000)
+if __name__ == "__main__":
+    asyncio.run(
+        uvicorn.run(
+            "app:app",
+            host="0.0.0.0",
+            port=5000,
+            reload=False
+        )
+    )
