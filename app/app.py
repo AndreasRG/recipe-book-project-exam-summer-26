@@ -6,10 +6,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from routers import pages, recipes, users
-from database import init_db
+from app.routers import pages, recipes, users
+from app.database import init_db
 
-from dotenv import load_dotenv
+from app.dotenv import load_dotenv
 import os
 
 # ---------------------------------------------------------

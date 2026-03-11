@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from models import Recipe, Ingredient, Tag
+from app.models import Recipe, Ingredient, Tag
 
 
 # ---------------------------------------------------------

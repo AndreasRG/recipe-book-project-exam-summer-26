@@ -6,8 +6,8 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi.templating import Jinja2Templates
 
-from database import get_db_session
-from services.recipes import list_recipes, get_recipe
+from app.database import get_db_session
+from app.services.recipes import list_recipes, get_recipe
 
 
 # ---------------------------------------------------------

@@ -5,9 +5,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db_session
-from schemas import UserCreate, UserUpdate, TokenCreate
-from services.users import create_user, authenticate_user
+from app.database import get_db_session
+from app.schemas import UserCreate, UserUpdate, TokenCreate
+from app.services.users import create_user, authenticate_user
 
 
 # ---------------------------------------------------------

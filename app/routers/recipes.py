@@ -5,9 +5,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database import get_db_session
-from schemas import RecipeCreate
-from services.recipes import list_recipes, get_recipe, create_recipe
+from app.database import get_db_session
+from app.schemas import RecipeCreate
+from app.services.recipes import list_recipes, get_recipe, create_recipe
 
 
 # ---------------------------------------------------------
