@@ -67,7 +67,7 @@ async def seed_database():
     Seed the database with test data from JSON file if it's empty.
     """
     import json
-    from models import User, Recipe, Ingredient, Tag, recipe_ingredients, recipe_tags
+    from app.models import User, Recipe, Ingredient, Tag, recipe_ingredients, recipe_tags
 
     async with AsyncSessionLocal() as session:
         try:
