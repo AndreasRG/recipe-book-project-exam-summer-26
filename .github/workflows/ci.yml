@@ -13,18 +13,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v3
 
+    - name: Set image name
+      run: echo "IMAGE_NAME=ghcr.io/andreasrg/awesome-recipe-book--2026-andreasrg-edition:latest" >> $GITHUB_ENV
+
     - name: Log in to GHCR
-      run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u andreasrg --password-stdin
 
     - name: Build Docker image
-      run: |
-        ghcr.io/andreasrg/awesome-recipe-book--2026-andreasrg-edition:latest
-        docker build -t $IMAGE_NAME .
-
-    # Optional: add pytest here
+      run: docker build -t $IMAGE_NAME .
 
     - name: Push Docker image (only on main)
       if: github.ref == 'refs/heads/main'
-      run: |
-        ghcr.io/andreasrg/awesome-recipe-book--2026-andreasrg-edition:latest
-        docker push $IMAGE_NAME
+      run: docker push $IMAGE_NAME
