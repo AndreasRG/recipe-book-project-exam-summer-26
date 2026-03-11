@@ -16,5 +16,8 @@ jobs:
         username: ${{ secrets.VM_USER }}
         key: ${{ secrets.SSH_PRIVATE_KEY }}
         script: |
-          cd /home/${{ secrets.VM_USER }}/deploy
+          echo "CONNECTED TO VM"
+          hostname
+          cd /home/azureuser/deploy
           ./run.sh
+
