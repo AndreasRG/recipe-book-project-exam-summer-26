@@ -36,7 +36,7 @@ async def home(request: Request, db: AsyncSession = Depends(get_db_session)):
     ]
 
     return templates.TemplateResponse(
-        "home.html",
+        "app/templates/home.html",
         {"request": request, "recipes": recipe_list}
     )
 
@@ -51,7 +51,7 @@ async def recipe_detail(id: int, request: Request, db: AsyncSession = Depends(ge
 
     if not recipe:
         return templates.TemplateResponse(
-            "recipe_not_found.html",
+            "app/templates/recipe_not_found.html",
             {"request": request},
             status_code=404
         )
@@ -68,6 +68,6 @@ async def recipe_detail(id: int, request: Request, db: AsyncSession = Depends(ge
     }
 
     return templates.TemplateResponse(
-        "recipe_detail.html",
+        "app/templates/recipe_detail.html",
         {"request": request, "recipe": recipe_data}
     )
