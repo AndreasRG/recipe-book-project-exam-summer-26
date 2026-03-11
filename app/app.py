@@ -9,12 +9,19 @@ from fastapi.templating import Jinja2Templates
 from routers import pages, recipes, users
 from database import init_db
 
+from dotenv import load_dotenv
+import os
 
 # ---------------------------------------------------------
 # App setup
 # ---------------------------------------------------------
 
+load_dotenv()
+
 app = FastAPI(title="Recipe API (FastAPI ORM)")
+
+# Example usage:
+# db_url = os.getenv("DATABASE_URL")
 
 # Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")

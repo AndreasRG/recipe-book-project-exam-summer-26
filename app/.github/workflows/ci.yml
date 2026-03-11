@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Log in to GHCR
+      run: echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+    - name: Build Docker image
+      run: |
+        IMAGE_NAME=ghcr.io/${{ github.repository }}:latest
+        docker build -t $IMAGE_NAME .
+
+    # Optional: add pytest here
+
+    - name: Push Docker image (only on main)
+      if: github.ref == 'refs/heads/main'
+      run: |
+        IMAGE_NAME=ghcr.io/${{ github.repository }}:latest
+        docker push $IMAGE_NAME
